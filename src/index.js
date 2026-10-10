@@ -38,10 +38,14 @@ Style:
 |- Do not wrap the entire response in **.
 |- Do not return raw JSON.`;
 
-const CORS_ORIGINS = (process.env.CORS_ORIGINS || "https://zyrex.vercel.app,https://zyrex.wasmer.app")
-  .split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+const CORS_ORIGINS = [
+  "https://zyrex.vercel.app",
+  "https://zyrex.wasmer.app",
+  ...(process.env.CORS_ORIGINS || "")
+    .split(",")
+    .map((origin) => origin.trim().replace(/^["']|["']$/g, ""))
+    .filter(Boolean),
+];
 
 function responseHeaders(origin) {
   const headers = new Headers({
