@@ -110,7 +110,7 @@ async function handleRequest(request) {
   const origin = request.headers.get("Origin");
 
   if (request.method === "OPTIONS") {
-    return new Response(null, { status: 200, headers: responseHeaders(origin) });
+    return new Response("", { status: 200, headers: responseHeaders(origin) });
   }
 
   if (request.method === "GET" && url.pathname === "/api/health") {
