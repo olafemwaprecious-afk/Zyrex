@@ -7,10 +7,16 @@ This document contains the backend details a frontend developer or coding agent 
 Configure the frontend with the **deployed backend's origin** (scheme and hostname, without an API path), then append the endpoint paths below.
 
 ```text
-VITE_API_BASE_URL=https://<deployed-backend-host>
+VITE_API_BASE_URL=https://zyrex-backend-obafemip715.wasmer.app
 ```
 
-The exact deployed backend hostname is not specified in this repository. Get it from the active Wasmer app deployment or the host where the Node server is running. Do not use a frontend URL as the backend base URL.
+The deployed Wasmer backend origin is:
+
+```text
+https://zyrex-backend-obafemip715.wasmer.app
+```
+
+Use this backend origin, not a frontend URL, as `VITE_API_BASE_URL`.
 
 For local Node.js development, the server defaults to:
 
@@ -50,6 +56,27 @@ CORS_ORIGINS=https://zyrex.vercel.app,https://zyrex.wasmer.app,http://localhost:
 The Node server allows `http://localhost:5173` by default when `CORS_ORIGINS` is not set. If it is set, it uses the configured list instead. The Wasmer configuration shown above does not include localhost.
 
 The backend permits `GET`, `POST`, and `OPTIONS`, and allows the `Content-Type` request header. The frontend should send JSON and does not need to send cookies or credentials.
+
+The Wasmer worker responds to preflight `OPTIONS` requests with HTTP `200`. The Node server responds with HTTP `204`. Both responses must include `Access-Control-Allow-Origin` matching the requesting frontend origin, along with the allowed methods and headers. The backend only sends `Access-Control-Allow-Origin` for an exact allowlist match; it does not grant access to unknown origins.
+
+### Current deployment status
+
+The CORS fix is committed and pushed in commit `ea50629` (`Fix CORS and configure Wasmer deployment`). As of 2026-10-10, the live Wasmer app still responds to `OPTIONS /api/zyrex-ai` with HTTP `500` and no CORS headers. The code change is not active in that deployment yet. Redeploy the Wasmer app from the repository:
+
+```bash
+wasmer deploy --owner obafemip715 --publish-package
+```
+
+After deployment, verify the preflight response from each production frontend origin. For example, in PowerShell use `curl.exe`:
+
+```powershell
+curl.exe -i -X OPTIONS "https://zyrex-backend-obafemip715.wasmer.app/api/zyrex-ai" `
+  -H "Origin: https://zyrex.wasmer.app" `
+  -H "Access-Control-Request-Method: POST" `
+  -H "Access-Control-Request-Headers: content-type"
+```
+
+Expect a successful status and `Access-Control-Allow-Origin: https://zyrex.wasmer.app`. Repeat with `https://zyrex.vercel.app` as the origin. A successful `GET /api/health` alone does not verify CORS; the preflight must succeed before the browser sends the AI `POST`.
 
 ## AI answer request
 
