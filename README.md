@@ -91,13 +91,39 @@ Health check endpoint.
 }
 ```
 
-## Deployment
+## Wasmer Edge Deployment
 
-This backend is designed for deployment to Railway or similar Node.js hosting platforms.
+The repository includes a Wasmer Edge JavaScript worker deployment alongside
+the Node.js server. Wasmer uses `src/index.js` and the `wasmer.toml` manifest;
+it does not run `server.js` or load `.env` automatically.
+
+1. Install the Wasmer CLI, sign in with `wasmer login`, then confirm the
+   account with `wasmer whoami`.
+2. From this project folder, deploy with:
+   ```bash
+   wasmer deploy --owner obafemip715 --publish-package
+   ```
+3. After the app exists, import the variables from your local `.env` as
+   Wasmer secrets:
+   ```bash
+   wasmer app secret import --from-file .env --update-existing --redeploy --app obafemip715/zyrex-backend-obafemip715
+   ```
+   Alternatively, add `GROQ_API_KEY` in the Wasmer dashboard and redeploy.
+   Do not put the key in `app.yaml` or commit `.env`; `.env` is git-ignored.
+4. Set `CORS_ORIGINS` in the Wasmer app environment to the exact origin(s) of
+   the frontend, comma-separated (for example,
+   `https://zyrex.vercel.app`). The initial value is in `app.yaml`.
+5. Point the frontend API base URL to the deployed Wasmer app URL. Check
+   `https://<your-app>.wasmer.app/api/health`; it should return
+   `{"status":"ok",...}`.
+
+The AI endpoint remains `POST /api/zyrex-ai`; its request and response format
+is documented below. The Node.js `npm start` deployment path remains available
+for Railway and other Node.js hosts.
 
 ## Security
 
-- Groq API key is stored in server-side environment variables
+- Groq API key is stored as a server-side environment variable/Wasmer secret
 - Never exposed to the frontend
 - CORS configured for development (configure appropriately for production)
 

@@ -49,14 +49,18 @@ Style:
 |- Do not return raw JSON.`;
 
 function sendJson(res, statusCode, payload, origin = null) {
-  const allowedOrigin = origin && CORS_ORIGINS.includes(origin) ? origin : CORS_ORIGINS[0];
-
-  res.writeHead(statusCode, {
+  const headers = {
     "Content-Type": "application/json; charset=utf-8",
-    "Access-Control-Allow-Origin": allowedOrigin,
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
-  });
+    "Vary": "Origin",
+  };
+
+  if (origin && CORS_ORIGINS.includes(origin)) {
+    headers["Access-Control-Allow-Origin"] = origin;
+  }
+
+  res.writeHead(statusCode, headers);
   res.end(JSON.stringify(payload));
 }
 
