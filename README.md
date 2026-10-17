@@ -110,9 +110,7 @@ it does not run `server.js` or load `.env` automatically.
    ```
    Alternatively, add `GROQ_API_KEY` in the Wasmer dashboard and redeploy.
    Do not put the key in `app.yaml` or commit `.env`; `.env` is git-ignored.
-4. Set `CORS_ORIGINS` in the Wasmer app environment to the exact origin(s) of
-   the frontend, comma-separated (for example,
-   `https://zyrex.vercel.app`). The initial value is in `app.yaml`.
+4. The Wasmer worker sends the fixed `Access-Control-Allow-Origin: https://zyrex.wasmer.app` header. Wasmer Edge strips the request `Origin` header before the worker receives it, so the worker cannot reflect or validate it. The API does not use cookies or credentialed browser requests. For Node.js deployments, the exact-origin allowlist works when `CORS_ORIGINS` is set.
 5. Point the frontend API base URL to the deployed Wasmer app URL. Check
    `https://<your-app>.wasmer.app/api/health`; it should return
    `{"status":"ok",...}`.

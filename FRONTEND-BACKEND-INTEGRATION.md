@@ -38,45 +38,36 @@ GET {BACKEND_BASE_URL}/api/health
 
 For example, if the deployed backend origin is `https://example-backend.wasmer.app`, the AI endpoint is `https://example-backend.wasmer.app/api/zyrex-ai`.
 
-## CORS: allowed frontend origins
+## CORS behavior
 
-The Wasmer configuration in `app.yaml` currently sets `CORS_ORIGINS` to:
+The Wasmer worker always sends the fixed `Access-Control-Allow-Origin: https://zyrex.wasmer.app` header. Wasmer Edge strips `Origin` and `Referer` before forwarding requests to the worker, so the worker cannot reflect or validate request origins. It never returns `*`, and requests from other browser origins do not match the fixed allowed origin. The API does not use browser cookies or credentialed requests.
 
-- `https://zyrex.vercel.app`
-- `https://zyrex.wasmer.app`
+The Node server uses the exact-origin `CORS_ORIGINS` allowlist. Both deployments allow `GET`, `POST`, and `OPTIONS`, plus the `Content-Type` and `Authorization` request headers observed in the frontend preflight. The backend does not use `Authorization` to call Groq; the Groq key stays server-side. The Wasmer worker responds to preflight with HTTP `200` and an empty body; the Node server responds with HTTP `204`.
 
-These are **frontend origins allowed to make browser requests**. They are not backend URLs or API endpoints. The browser's `Origin` must match one of these values exactly (scheme and hostname; no path or trailing slash) for the Wasmer worker to return `Access-Control-Allow-Origin`.
+### Wasmer deploy and verify
 
-If the frontend is hosted at a different origin, add that exact origin to the backend deployment's `CORS_ORIGINS` environment variable and redeploy/restart the backend. The variable is a comma-separated list, for example:
+From this project folder, `wasmer.toml` packages `src/index.js` as the worker. `GET /` returns the health response for Wasmer's deployment check; this is an API, not an SPA, so no `index.html` fallback is needed.
 
-```text
-CORS_ORIGINS=https://zyrex.vercel.app,https://zyrex.wasmer.app,http://localhost:5173
-```
-
-The Node server allows `http://localhost:5173` by default when `CORS_ORIGINS` is not set. If it is set, it uses the configured list instead. The Wasmer configuration shown above does not include localhost.
-
-The backend permits `GET`, `POST`, and `OPTIONS`, and allows the `Content-Type` request header. The frontend should send JSON and does not need to send cookies or credentials.
-
-The Wasmer worker responds to preflight `OPTIONS` requests with HTTP `200`. The Node server responds with HTTP `204`. Both responses must include `Access-Control-Allow-Origin` matching the requesting frontend origin, along with the allowed methods and headers. The backend only sends `Access-Control-Allow-Origin` for an exact allowlist match; it does not grant access to unknown origins.
-
-### Current deployment status
-
-The CORS fix is committed and pushed in commit `ea50629` (`Fix CORS and configure Wasmer deployment`). As of 2026-10-10, the live Wasmer app still responds to `OPTIONS /api/zyrex-ai` with HTTP `500` and no CORS headers. The code change is not active in that deployment yet. Redeploy the Wasmer app from the repository:
+Deploy the folder:
 
 ```bash
 wasmer deploy --owner obafemip715 --publish-package
 ```
 
-After deployment, verify the preflight response from each production frontend origin. For example, in PowerShell use `curl.exe`:
+Test a preflight with:
 
 ```powershell
 curl.exe -i -X OPTIONS "https://zyrex-backend-obafemip715.wasmer.app/api/zyrex-ai" `
   -H "Origin: https://zyrex.wasmer.app" `
   -H "Access-Control-Request-Method: POST" `
-  -H "Access-Control-Request-Headers: content-type"
+  -H "Access-Control-Request-Headers: content-type,authorization"
 ```
 
-Expect a successful status and `Access-Control-Allow-Origin: https://zyrex.wasmer.app`. Repeat with `https://zyrex.vercel.app` as the origin. A successful `GET /api/health` alone does not verify CORS; the preflight must succeed before the browser sends the AI `POST`.
+Expect HTTP `200`, `Access-Control-Allow-Origin: https://zyrex.wasmer.app`, `Access-Control-Allow-Methods` including `POST`, and `Access-Control-Allow-Headers` including `Content-Type` (and `Authorization` if requested). A successful status or matching origin alone does not verify browser CORS: the preflight must allow the requested method and headers. If those headers are missing, redeploy the worker and check whether Wasmer Edge or another gateway is intercepting or overriding `OPTIONS` responses. A successful `GET /` or `/api/health` confirms routing; the preflight verifies browser CORS.
+
+### Latest deployment verification (2026-10-11)
+
+The Wasmer deployment completed successfully, and `GET /api/health` returned HTTP `200`. However, the live `OPTIONS /api/zyrex-ai` preflight also returned HTTP `200` but included only `Access-Control-Allow-Origin`; it omitted both `Access-Control-Allow-Methods` and `Access-Control-Allow-Headers`. The CORS issue therefore remains unresolved in production. The worker code sets these headers, so investigate whether Wasmer Edge or another gateway is intercepting or stripping them, and repeat the preflight check after resolving it.
 
 ## AI answer request
 
