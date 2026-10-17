@@ -9,8 +9,8 @@ import httpx
 PORT = int(os.environ.get("PORT", 8080))
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 MODEL_ID = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
-ALLOWED_ORIGIN = "https://zyrex.wasmer.app/"
-KEEP_AWAKE_URL = "https://zyrex-mpya.onrender.com"
+ALLOWED_ORIGIN = "https://zyrex.wasmer.app"
+KEEP_AWAKE_URL = "https://zyrex-mpya.onrender.com/health"
 
 SYSTEM_INSTRUCTION = """You are ZYREX AI, a trading-focused assistant.
 
@@ -136,8 +136,8 @@ async def handle_websocket(websocket):
 
 
 def process_request(path, headers):
-    """Intercept HTTP health pings from Render and the keep_awake loop based on the raw string path."""
-    if path == "/" or path == "/health":
+    """Intercept HTTP health pings purely on the /health route, leaving the root path clear for WebSockets."""
+    if path == "/health":
         import http
         return http.HTTPStatus.OK, [("Content-Type", "text/plain")], b"ZYREX Engine Online"
     return None
