@@ -135,9 +135,10 @@ async def handle_websocket(websocket):
         await websocket.close()
 
 
-def process_request(connection, request):
-    """Intercept HTTP health pings from Render and the keep_awake loop before they reach WebSocket parsing."""
-    if request.path == "/" or request.path == "/health":
+def process_request(path, headers):
+    """Intercept HTTP health pings from Render and the keep_awake loop based on the raw string path."""
+    if path == "/" or path == "/health":
+        import http
         return http.HTTPStatus.OK, [("Content-Type", "text/plain")], b"ZYREX Engine Online"
     return None
 
