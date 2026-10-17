@@ -1,6 +1,7 @@
 import os
 import asyncio
 import json
+import http
 from websockets.server import serve
 from groq import AsyncGroq
 import httpx
@@ -9,7 +10,7 @@ PORT = int(os.environ.get("PORT", 8080))
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 MODEL_ID = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 ALLOWED_ORIGIN = "https://zyrex.wasmer.app/"
-KEEP_AWAKE_URL = "https://zyrex.onrender.com"
+KEEP_AWAKE_URL = "https://zyrex-mpya.onrender.com"
 
 SYSTEM_INSTRUCTION = """You are ZYREX AI, a trading-focused assistant.
 
@@ -134,13 +135,20 @@ async def handle_websocket(websocket):
         await websocket.close()
 
 
+def process_request(connection, request):
+    """Intercept HTTP health pings from Render and the keep_awake loop before they reach WebSocket parsing."""
+    if request.path == "/" or request.path == "/health":
+        return http.HTTPStatus.OK, [("Content-Type", "text/plain")], b"ZYREX Engine Online"
+    return None
+
+
 async def main():
     """Main entry point: start keep-awake task and WebSocket server."""
     # Start background keep-awake task
     asyncio.create_task(keep_awake())
 
     # Start WebSocket server
-    async with serve(handle_websocket, "0.0.0.0", PORT):
+    async with serve(handle_websocket, "0.0.0.0", PORT, process_request=process_request):
         print(f"ZYREX WebSocket server listening on port {PORT}")
         print(f"Allowed origin: {ALLOWED_ORIGIN}")
         await asyncio.Future()  # Run forever
