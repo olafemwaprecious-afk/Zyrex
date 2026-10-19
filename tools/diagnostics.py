@@ -5,6 +5,7 @@ Provides status information about configured market-data integrations.
 Does not expose secrets, API keys, or internal configuration.
 """
 
+import os
 import json
 import httpx
 from datetime import datetime
@@ -41,31 +42,66 @@ async def check_tool_status() -> str:
                     "status": "error",
                     "http_status": response.status_code
                 }
-    except Exception as e:
+    except httpx.TimeoutException:
         status_checks["integrations"]["geckoterminal"] = {
             "status": "unreachable",
-            "error": str(e)
+            "error": "Request timed out"
+        }
+    except httpx.RequestError:
+        status_checks["integrations"]["geckoterminal"] = {
+            "status": "unreachable",
+            "error": "Provider could not be reached"
         }
 
-    # Check Binance public API
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get("https://data-api.binance.vision/api/v3/ping")
-            if response.status_code == 200:
-                status_checks["integrations"]["binance"] = {
-                    "status": "operational",
-                    "endpoint": "https://data-api.binance.vision",
-                    "authentication": "not required for public market data endpoints"
-                }
-            else:
-                status_checks["integrations"]["binance"] = {
-                    "status": "error",
-                    "http_status": response.status_code
-                }
-    except Exception as e:
-        status_checks["integrations"]["binance"] = {
-            "status": "unreachable",
-            "error": str(e)
+    # Check CoinAPI
+    coinapi_key = os.environ.get("COINAPI_KEY")
+    if coinapi_key:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(
+                    "https://rest.coinapi.io/v1/exchanges",
+                    headers={"X-CoinAPI-Key": coinapi_key}
+                )
+                if response.status_code == 200:
+                    status_checks["integrations"]["coinapi"] = {
+                        "status": "operational",
+                        "endpoint": "https://rest.coinapi.io/v1",
+                        "authentication": "configured via COINAPI_KEY"
+                    }
+                elif response.status_code == 401:
+                    status_checks["integrations"]["coinapi"] = {
+                        "status": "authentication_error",
+                        "error": "Credentials rejected"
+                    }
+                elif response.status_code == 403:
+                    status_checks["integrations"]["coinapi"] = {
+                        "status": "access_error",
+                        "error": "Endpoint access is unavailable for this subscription"
+                    }
+                elif response.status_code == 429:
+                    status_checks["integrations"]["coinapi"] = {
+                        "status": "rate_limited",
+                        "error": "Subscription rate limit reached"
+                    }
+                else:
+                    status_checks["integrations"]["coinapi"] = {
+                        "status": "error",
+                        "http_status": response.status_code
+                    }
+        except httpx.TimeoutException:
+            status_checks["integrations"]["coinapi"] = {
+                "status": "unreachable",
+                "error": "Request timed out"
+            }
+        except httpx.RequestError:
+            status_checks["integrations"]["coinapi"] = {
+                "status": "unreachable",
+                "error": "Provider could not be reached"
+            }
+    else:
+        status_checks["integrations"]["coinapi"] = {
+            "status": "not_configured",
+            "error": "COINAPI_KEY environment variable not set"
         }
 
     # Local tools (always operational)

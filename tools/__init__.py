@@ -11,7 +11,7 @@ from .geckoterminal import (
     get_pool_ohlcv,
     get_trending_pools,
 )
-from .binance import (
+from .coinapi import (
     get_ticker_price,
     get_24hr_ticker,
     get_klines,

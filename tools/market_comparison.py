@@ -132,12 +132,20 @@ def compare_tokens(token_data_list: List[Dict[str, Any]]) -> str:
                         "volume_24h_usd": str(volume_24h) if volume_24h else "unavailable",
                         "source": token.get("source", "unknown")
                     }
-                # Binance-style data
+                # CoinAPI-style data
+                elif "asset_id_base" in token or "rate" in token:
+                    comparison = {
+                        "asset_id_base": token.get("asset_id_base"),
+                        "asset_id_quote": token.get("asset_id_quote"),
+                        "rate": token.get("rate"),
+                        "source": token.get("source", "CoinAPI")
+                    }
+                # Legacy format (symbol in dict)
                 elif "symbol" in token:
                     comparison = {
                         "symbol": token.get("symbol"),
                         "price": token.get("price", "unavailable"),
-                        "source": "Binance"
+                        "source": token.get("source", "unknown")
                     }
                 else:
                     comparison = {

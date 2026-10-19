@@ -7,7 +7,7 @@ Agentic Trading Intelligence API for ZYREX AI powered by Agno + Groq.
 This is the Python backend server for ZYREX AI. It provides:
 - **Agno agent framework** for agentic tool calling and reasoning
 - **Groq API integration** for fast LLM inference
-- **Market data tools**: GeckoTerminal (DEX) and Binance (CEX) public APIs
+- **Market data tools**: GeckoTerminal (DEX) and CoinAPI (CEX) APIs
 - **Risk checking engine**: Deterministic trade validation and risk calculations
 - **WebSocket streaming**: Real-time response streaming to the frontend
 - **Keep-alive system**: Automatic self-ping for Render deployment
@@ -28,7 +28,7 @@ The backend uses an agentic architecture:
 ### Available Tools
 
 - **GeckoTerminal Tools**: Search pools, get pool data, OHLCV charts, trending pools
-- **Binance Tools**: Ticker prices, 24hr statistics, kline/candlestick data
+- **CoinAPI Tools**: Exchange rates, ticker data, OHLCV candlestick data
 - **Risk Checker**: Trade validation, risk amount calculation, reward-to-risk ratio
 - **Market Comparison**: Compare pools and tokens across different sources
 - **Diagnostics**: Check operational status of all integrations
@@ -38,6 +38,7 @@ The backend uses an agentic architecture:
 Required environment variables (see `.env.example`):
 
 - `GROQ_API_KEY` - Your Groq API key (required)
+- `COINAPI_KEY` - Your CoinAPI key (required for CEX market data)
 - `GROQ_MODEL` - Groq model ID (default: `openai/gpt-oss-120b`)
 - `PORT` - Server port (default: 8080)
 - `ALLOWED_ORIGIN` - Frontend origin for CORS (default: `https://zyrex.wasmer.app`)
@@ -47,7 +48,7 @@ Required environment variables (see `.env.example`):
 
 ### Prerequisites
 
-- Python 3.9 or higher
+- Python 3.10 or higher
 - pip or uv package manager
 
 ### Installation
@@ -57,10 +58,15 @@ Required environment variables (see `.env.example`):
    cp .env.example .env
    ```
 
-2. Add your Groq API key to `.env`:
+2. Add your API keys to `.env`:
    ```
    GROQ_API_KEY=your_groq_api_key_here
+   COINAPI_KEY=your_coinapi_key_here
    ```
+
+   **Obtain CoinAPI Key:**
+   - Create an account at https://www.coinapi.io/ and create a key in the CoinAPI dashboard.
+   - Put the key only in the backend `.env` as `COINAPI_KEY`; do not commit it or put it in frontend code.
 
 3. Install dependencies:
    ```bash
@@ -75,21 +81,6 @@ Required environment variables (see `.env.example`):
    ```
 
 The server will start on the configured port (default 8080) and listen on `0.0.0.0`.
-
-## Running Tests
-
-Run the test suite to verify the implementation:
-
-```bash
-pytest tests/
-```
-
-Tests cover:
-- Risk checker calculations and validation
-- Market comparison logic
-- GeckoTerminal API integration (with mocked HTTP)
-- Binance API integration (with mocked HTTP)
-- Main backend configuration
 
 ## API Protocol
 
@@ -146,10 +137,11 @@ The backend is deployed on Render at: https://zyrex-mpya.onrender.com
 Add these in Render → Environment:
 
 1. `GROQ_API_KEY` - Your Groq API key (required)
-2. `GROQ_MODEL` - `openai/gpt-oss-120b` (optional, has default)
-3. `PORT` - Render sets this automatically (optional)
-4. `ALLOWED_ORIGIN` - `https://zyrex.wasmer.app` (optional, has default)
-5. `KEEP_AWAKE_URL` - `https://zyrex-mpya.onrender.com/health` (optional, has default)
+2. `COINAPI_KEY` - Your CoinAPI key (required for CoinAPI market data)
+3. `GROQ_MODEL` - `openai/gpt-oss-120b` (optional, has default)
+4. `PORT` - Render sets this automatically (optional)
+5. `ALLOWED_ORIGIN` - `https://zyrex.wasmer.app` (optional, has default)
+6. `KEEP_AWAKE_URL` - `https://zyrex-mpya.onrender.com/health` (optional, has default)
 
 ### Deployment Steps
 
@@ -169,14 +161,17 @@ Add these in Render → Environment:
 - **Required for MVP:** Yes (free tier sufficient)
 - **Environment Variable:** None required
 
-### Binance (CEX Data)
+### CoinAPI (Aggregated Rates and CEX OHLCV)
 
-- **Purpose:** Centralized exchange market data
-- **Base URL:** `https://data-api.binance.vision` (public data only)
-- **Rate Limit:** Public market data endpoints
-- **Authentication:** Not required for public endpoints
-- **Required for MVP:** Yes (public endpoints sufficient)
-- **Environment Variable:** None required
+- **Authentication:** `X-CoinAPI-Key` HTTP header, read only by the backend from `COINAPI_KEY`.
+- **Aggregated asset-pair rate:** `GET https://rest.coinapi.io/v1/exchangerate/{asset_id_base}/{asset_id_quote}`. CoinAPI describes this as an aggregated rolling 24-hour VWAP, not a price from a specific exchange.
+- **Latest daily candle:** `GET https://rest.coinapi.io/v1/ohlcv/{symbol_id}/latest?period_id=1DAY&limit=1`.
+- **Historical candles:** `GET https://rest.coinapi.io/v1/ohlcv/{symbol_id}/history?period_id={period_id}&limit={limit}`.
+- OHLCV uses venue-specific symbol IDs such as `BITSTAMP_SPOT_BTC_USD`; it is a specific exchange market, unlike the aggregated exchange-rate endpoint.
+- CoinAPI documents OHLCV REST data as potentially delayed by a few seconds. Exchange-rate responses include the provider timestamp, which the tool returns without substituting backend time.
+- Endpoint access, supported assets/symbols, history, and request quotas depend on the subscription. Public docs list Startup limits of 10 requests/second and 1,000 requests/day; confirm both the limits and endpoint entitlement for the key in the CoinAPI dashboard. This backend does not make a request just to infer an account's plan.
+- **Environment Variable:** `COINAPI_KEY` (backend only)
+- **Official docs:** [REST API](https://www.coinapi.io/products/market-data-api/docs/rest-api), [Exchange Rates](https://www.coinapi.io/products/market-data-api/docs/rest-api/exchange-rates/Get%20specific%20rate), [OHLCV](https://www.coinapi.io/products/market-data-api/docs/rest-api/ohlcv/overview).
 
 ### Groq (LLM)
 
@@ -189,8 +184,8 @@ Add these in Render → Environment:
 
 ## Security
 
-- Groq API key is stored as a server-side environment variable
-- Never exposed to the frontend, logs, or error responses
+- Groq and CoinAPI keys are stored as server-side environment variables
+- CoinAPI key is sent only in the `X-CoinAPI-Key` request header; it is not included in tool results, logs, or error responses
 - WebSocket origin restricted to `https://zyrex.wasmer.app`
 - No live trade execution or private API access
 - Tools use public read-only endpoints only
@@ -202,7 +197,7 @@ Add these in Render → Environment:
 
 - ✅ Agno + Groq agent integration
 - ✅ GeckoTerminal market data tools
-- ✅ Binance market data tools
+- ✅ CoinAPI aggregated exchange rates and venue-specific OHLCV tools
 - ✅ Deterministic risk checking engine
 - ✅ Market comparison tools
 - ✅ WebSocket streaming protocol
@@ -240,8 +235,18 @@ pip install -r requirements.txt
 
 **Rate limit errors:**
 - GeckoTerminal: ~30 calls/minute (free tier)
-- Implement caching to reduce requests
-- Consider paid plan for higher limits
+- CoinAPI: wait before retrying and verify the request quota and endpoint entitlement in the CoinAPI dashboard
+
+**CoinAPI errors:**
+- Missing key: set `COINAPI_KEY` in the backend environment and restart or redeploy the service.
+- HTTP 401: verify the key in the CoinAPI dashboard and update the backend environment value.
+- HTTP 403: the endpoint or requested data may not be included in the subscription.
+- HTTP 429: the subscription request quota has been reached; wait before retrying and check current plan limits.
+- Timeouts or provider outages: retry later; errors do not include request headers or credential values.
+
+### Testing CoinAPI
+
+Run `python -m pytest -q`. CoinAPI tests use mocked HTTP responses and do not consume API quota. For a live smoke test, ask ZYREX: "What is the current BTC/USDT price?" The agent should call the aggregated exchange-rate tool and identify the source and provider timestamp; it must explain an access or provider error instead of inventing a price.
 
 ## Development
 
@@ -256,7 +261,7 @@ ZYREX BACKEND/
 ├── tools/                # Tool implementations
 │   ├── __init__.py
 │   ├── geckoterminal.py  # DEX market data
-│   ├── binance.py        # CEX market data
+│   ├── coinapi.py        # Aggregated rates and CEX OHLCV market data
 │   ├── risk_checker.py   # Trade validation
 │   ├── market_comparison.py
 │   └── diagnostics.py
@@ -265,7 +270,7 @@ ZYREX BACKEND/
     ├── test_risk_checker.py
     ├── test_market_comparison.py
     ├── test_geckoterminal.py
-    └── test_binance.py
+   └── test_coinapi.py
 ```
 
 ### Adding New Tools

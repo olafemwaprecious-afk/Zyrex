@@ -88,6 +88,8 @@ def create_zyrex_agent():
         instructions=[
             "You are ZYREX AI, a trading-focused assistant.",
             "Use tools when the user asks for current market data, token prices, or trade analysis.",
+            "For a current price for an asset pair such as BTC/USDT, call get_ticker_price with the base and quote asset IDs. This returns CoinAPI's aggregated rolling 24-hour VWAP, not a price from a specific exchange.",
+            "For exchange-specific candles, use get_klines or get_24hr_ticker with a CoinAPI symbol ID. Do not describe a daily candle as a rolling 24-hour statistic.",
             "For general trading questions without data requests, answer directly without tools.",
             "Always explain concepts clearly for beginners and intermediate traders.",
             "Never fabricate market data, prices, or token information.",
@@ -171,14 +173,16 @@ async def handle_websocket(websocket):
                     await websocket.send("[DONE]")
 
                 except Exception as agent_error:
-                    await websocket.send(json.dumps({"error": f"Agent error: {str(agent_error)}"}))
+                    print(f"Agent request failed: {type(agent_error).__name__}")
+                    await websocket.send(json.dumps({"error": "The assistant could not complete this request. Please try again later."}))
                     await websocket.send("[DONE]")
 
             except json.JSONDecodeError:
                 await websocket.send(json.dumps({"error": "Invalid JSON payload"}))
                 await websocket.send("[DONE]")
             except Exception as e:
-                await websocket.send(json.dumps({"error": str(e)}))
+                print(f"WebSocket message failed: {type(e).__name__}")
+                await websocket.send(json.dumps({"error": "The request could not be processed."}))
                 await websocket.send("[DONE]")
 
     except Exception:
