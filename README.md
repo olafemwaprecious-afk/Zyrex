@@ -1,61 +1,112 @@
 # ZYREX Backend
 
-Trading Intelligence API for ZYREX AI.
+Agentic Trading Intelligence API for ZYREX AI powered by Agno + Groq.
 
 ## Overview
 
-This is the standalone backend server for ZYREX AI. It handles:
-- Groq API integration
-- ZYREX AI system instructions
-- Request/response processing
-- CORS handling
-- Health checks
+This is the Python backend server for ZYREX AI. It provides:
+- **Agno agent framework** for agentic tool calling and reasoning
+- **Groq API integration** for fast LLM inference
+- **Market data tools**: GeckoTerminal (DEX) and Binance (CEX) public APIs
+- **Risk checking engine**: Deterministic trade validation and risk calculations
+- **WebSocket streaming**: Real-time response streaming to the frontend
+- **Keep-alive system**: Automatic self-ping for Render deployment
+- **Health checks**: Endpoint for deployment monitoring
+
+## Architecture
+
+The backend uses an agentic architecture:
+
+1. **User Request** → WebSocket → ZYREX Backend
+2. **Agno Agent** receives the request with conversation history
+3. **Tool Selection**: Agent decides when to use tools based on context
+4. **Tool Execution**: Market data, risk checking, or comparison tools run
+5. **Result Integration**: Tool results feed back into the agent's reasoning
+6. **Response Generation**: Agent produces final answer with tool-informed insights
+7. **Streaming**: Response streams incrementally through WebSocket to frontend
+
+### Available Tools
+
+- **GeckoTerminal Tools**: Search pools, get pool data, OHLCV charts, trending pools
+- **Binance Tools**: Ticker prices, 24hr statistics, kline/candlestick data
+- **Risk Checker**: Trade validation, risk amount calculation, reward-to-risk ratio
+- **Market Comparison**: Compare pools and tokens across different sources
+- **Diagnostics**: Check operational status of all integrations
 
 ## Environment Variables
 
 Required environment variables (see `.env.example`):
 
-- `GROQ_API_KEY` - Your Groq API key
-- `PORT` - Server port (default: 3001)
+- `GROQ_API_KEY` - Your Groq API key (required)
+- `GROQ_MODEL` - Groq model ID (default: `openai/gpt-oss-120b`)
+- `PORT` - Server port (default: 8080)
+- `ALLOWED_ORIGIN` - Frontend origin for CORS (default: `https://zyrex.wasmer.app`)
+- `KEEP_AWAKE_URL` - URL for keep-alive self-ping (default: Render deployment URL)
 
 ## Setup
+
+### Prerequisites
+
+- Python 3.9 or higher
+- pip or uv package manager
+
+### Installation
 
 1. Copy `.env.example` to `.env`:
    ```bash
    cp .env.example .env
    ```
 
-2. Add your Groq API key to `.env`
+2. Add your Groq API key to `.env`:
+   ```
+   GROQ_API_KEY=your_groq_api_key_here
+   ```
 
-3. Install dependencies (none currently required - uses Node.js built-in modules)
+3. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   # or with uv:
+   uv pip install -r requirements.txt
+   ```
 
 4. Start the server:
    ```bash
-   npm run dev
+   python main.py
    ```
 
-## Railway Deployment
+The server will start on the configured port (default 8080) and listen on `0.0.0.0`.
 
-1. Push this repository to GitHub
-2. Create a new project on Railway
-3. Connect your GitHub repository
-4. Add these environment variables in Railway:
-   - `PORT` (Railway sets this automatically, but you can override)
-   - `GROQ_API_KEY` (your Groq API key)
-   - `CORS_ORIGINS` (comma-separated list: `http://localhost:5173,https://zyrex.vercel.app,https://zyrex.wasmer.app`)
-5. Deploy
-6. Railway will automatically detect it's a Node.js project and run `npm start`
+## Running Tests
 
-## API Endpoints
+Run the test suite to verify the implementation:
 
-### POST /api/zyrex-ai
+```bash
+pytest tests/
+```
 
-Main AI endpoint for ZYREX analysis.
+Tests cover:
+- Risk checker calculations and validation
+- Market comparison logic
+- GeckoTerminal API integration (with mocked HTTP)
+- Binance API integration (with mocked HTTP)
+- Main backend configuration
 
-**Request Body:**
+## API Protocol
+
+### WebSocket Connection
+
+The backend uses WebSocket for real-time streaming:
+
+**Connection URL:** `wss://zyrex-mpya.onrender.com`
+
+**Allowed Origin:** `https://zyrex.wasmer.app`
+
+### Message Format
+
+**Request:**
 ```json
 {
-  "prompt": "What is a liquidity sweep?",
+  "prompt": "What is the current price of BTC?",
   "mode": "analyst",
   "history": [
     { "role": "user", "text": "Previous message" },
@@ -64,70 +115,167 @@ Main AI endpoint for ZYREX analysis.
 }
 ```
 
-**Response:**
-```json
-{
-  "status": "ready",
-  "title": "ZYREX AI",
-  "blocks": [
-    {
-      "type": "summary",
-      "text": "AI response in Markdown format"
-    }
-  ]
-}
-```
+**Response Stream:**
+- Text chunks sent incrementally
+- Ends with `[DONE]` marker
+- Errors sent as JSON before `[DONE]`
 
-### GET /api/health
+### Health Check
 
-Health check endpoint.
+**GET /health**
+
+Health check endpoint for Render and monitoring.
 
 **Response:**
-```json
-{
-  "status": "ok",
-  "service": "ZYREX Backend",
-  "version": "1.0.0"
-}
+```
+ZYREX Engine Online
 ```
 
-## Wasmer Edge Deployment
+## Render Deployment
 
-The repository includes a Wasmer Edge JavaScript worker deployment alongside
-the Node.js server. Wasmer uses `src/index.js` and the `wasmer.toml` manifest;
-it does not run `server.js` or load `.env` automatically.
+The backend is deployed on Render at: https://zyrex-mpya.onrender.com
 
-1. Install the Wasmer CLI, sign in with `wasmer login`, then confirm the
-   account with `wasmer whoami`.
-2. From this project folder, deploy with:
-   ```bash
-   wasmer deploy --owner obafemip715 --publish-package
-   ```
-3. After the app exists, import the variables from your local `.env` as
-   Wasmer secrets:
-   ```bash
-   wasmer app secret import --from-file .env --update-existing --redeploy --app obafemip715/zyrex-backend-obafemip715
-   ```
-   Alternatively, add `GROQ_API_KEY` in the Wasmer dashboard and redeploy.
-   Do not put the key in `app.yaml` or commit `.env`; `.env` is git-ignored.
-4. The Wasmer worker sends the fixed `Access-Control-Allow-Origin: https://zyrex.wasmer.app` header. Wasmer Edge strips the request `Origin` header before the worker receives it, so the worker cannot reflect or validate it. The API does not use cookies or credentialed browser requests. For Node.js deployments, the exact-origin allowlist works when `CORS_ORIGINS` is set.
-5. Point the frontend API base URL to the deployed Wasmer app URL. Check
-   `https://<your-app>.wasmer.app/api/health`; it should return
-   `{"status":"ok",...}`.
+### Deployment Configuration
 
-The AI endpoint remains `POST /api/zyrex-ai`; its request and response format
-is documented below. The Node.js `npm start` deployment path remains available
-for Railway and other Node.js hosts.
+- **Start Command:** `python main.py` (defined in `Procfile`)
+- **Python Version:** Latest supported by Render
+- **Dependencies:** Defined in `requirements.txt`
+
+### Environment Variables on Render
+
+Add these in Render → Environment:
+
+1. `GROQ_API_KEY` - Your Groq API key (required)
+2. `GROQ_MODEL` - `openai/gpt-oss-120b` (optional, has default)
+3. `PORT` - Render sets this automatically (optional)
+4. `ALLOWED_ORIGIN` - `https://zyrex.wasmer.app` (optional, has default)
+5. `KEEP_AWAKE_URL` - `https://zyrex-mpya.onrender.com/health` (optional, has default)
+
+### Deployment Steps
+
+1. Push code to GitHub main branch
+2. Render auto-deploys from the main branch
+3. Add environment variables in Render dashboard
+4. Verify deployment at https://zyrex-mpya.onrender.com/health
+
+## API Integrations
+
+### GeckoTerminal (DEX Data)
+
+- **Purpose:** Decentralized exchange token and pool data
+- **Base URL:** `https://api.geckoterminal.com/api/v2`
+- **Rate Limit:** ~30 calls/minute (public API)
+- **Authentication:** Not required for public endpoints
+- **Required for MVP:** Yes (free tier sufficient)
+- **Environment Variable:** None required
+
+### Binance (CEX Data)
+
+- **Purpose:** Centralized exchange market data
+- **Base URL:** `https://data-api.binance.vision` (public data only)
+- **Rate Limit:** Public market data endpoints
+- **Authentication:** Not required for public endpoints
+- **Required for MVP:** Yes (public endpoints sufficient)
+- **Environment Variable:** None required
+
+### Groq (LLM)
+
+- **Purpose:** Fast language model inference
+- **Base URL:** Groq API (handled by SDK)
+- **Authentication:** Required via API key
+- **Required for MVP:** Yes
+- **Environment Variable:** `GROQ_API_KEY` (required)
+- **Get Key:** https://console.groq.com/keys
 
 ## Security
 
-- Groq API key is stored as a server-side environment variable/Wasmer secret
-- Never exposed to the frontend
-- CORS configured for development (configure appropriately for production)
+- Groq API key is stored as a server-side environment variable
+- Never exposed to the frontend, logs, or error responses
+- WebSocket origin restricted to `https://zyrex.wasmer.app`
+- No live trade execution or private API access
+- Tools use public read-only endpoints only
+- Risk calculations are deterministic and local
 
-## AI Configuration
+## Current Implementation
 
-- Model: `openai/gpt-oss-120b`
-- Temperature: 0.7
-- Max tokens: 2000
-- Conversation history: Last 8 messages
+### What's Implemented Now
+
+- ✅ Agno + Groq agent integration
+- ✅ GeckoTerminal market data tools
+- ✅ Binance market data tools
+- ✅ Deterministic risk checking engine
+- ✅ Market comparison tools
+- ✅ WebSocket streaming protocol
+- ✅ Keep-alive for Render
+- ✅ Health check endpoint
+- ✅ Comprehensive test suite
+- ✅ Tool status diagnostics
+
+### Deferred to Later Phases
+
+- ❌ Supabase/persistent database (not required for MVP)
+- ❌ Private exchange API keys (public endpoints sufficient)
+- ❌ Live order execution (analysis and simulation only)
+- ❌ MT5 integration (not required for MVP)
+- ❌ Wallet signing or private key handling
+- ❌ Real-money trading capabilities
+
+## Troubleshooting
+
+### Common Issues
+
+**Import errors:**
+```bash
+pip install -r requirements.txt
+```
+
+**Groq API key errors:**
+- Verify `GROQ_API_KEY` is set in environment
+- Check key is valid at https://console.groq.com/
+
+**WebSocket connection failures:**
+- Verify frontend origin matches `ALLOWED_ORIGIN`
+- Check Render deployment status
+- Review Render logs for errors
+
+**Rate limit errors:**
+- GeckoTerminal: ~30 calls/minute (free tier)
+- Implement caching to reduce requests
+- Consider paid plan for higher limits
+
+## Development
+
+### Project Structure
+
+```
+ZYREX BACKEND/
+├── main.py                 # Main WebSocket server and agent setup
+├── requirements.txt        # Python dependencies
+├── Procfile               # Render deployment config
+├── .env.example          # Environment variable template
+├── tools/                # Tool implementations
+│   ├── __init__.py
+│   ├── geckoterminal.py  # DEX market data
+│   ├── binance.py        # CEX market data
+│   ├── risk_checker.py   # Trade validation
+│   ├── market_comparison.py
+│   └── diagnostics.py
+└── tests/                # Test suite
+    ├── test_main.py
+    ├── test_risk_checker.py
+    ├── test_market_comparison.py
+    ├── test_geckoterminal.py
+    └── test_binance.py
+```
+
+### Adding New Tools
+
+1. Create tool function in `tools/` directory
+2. Add docstring with parameters and return format
+3. Import in `tools/__init__.py`
+4. Add to agent tools list in `main.py`
+5. Write tests in `tests/`
+
+## License
+
+This is the backend for ZYREX AI. See the main project repository for license information.

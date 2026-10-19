@@ -3,8 +3,25 @@ import asyncio
 import json
 import http
 from websockets.server import serve
-from groq import AsyncGroq
+from agno.agent import Agent, RunEvent
+from agno.models.groq import Groq
+from agno.tools import tool
 import httpx
+
+from tools import (
+    search_pools,
+    get_pool_data,
+    get_pool_ohlcv,
+    get_trending_pools,
+    get_ticker_price,
+    get_24hr_ticker,
+    get_klines,
+    evaluate_trade_risk,
+    validate_trade_parameters,
+    compare_pools,
+    compare_tokens,
+    check_tool_status,
+)
 
 PORT = int(os.environ.get("PORT", 8080))
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
@@ -63,8 +80,44 @@ async def keep_awake():
         await asyncio.sleep(660)  # 11 minutes = 660 seconds
 
 
+def create_zyrex_agent():
+    """Create and configure the ZYREX agent with Agno and Groq."""
+    return Agent(
+        model=Groq(id=MODEL_ID, api_key=GROQ_API_KEY),
+        description=SYSTEM_INSTRUCTION,
+        instructions=[
+            "You are ZYREX AI, a trading-focused assistant.",
+            "Use tools when the user asks for current market data, token prices, or trade analysis.",
+            "For general trading questions without data requests, answer directly without tools.",
+            "Always explain concepts clearly for beginners and intermediate traders.",
+            "Never fabricate market data, prices, or token information.",
+            "If a tool fails or returns an error, explain the issue honestly to the user.",
+            "Use the risk-checking tools when users ask about trade validation or risk calculations.",
+            "Provide clear, concise answers with appropriate use of Markdown formatting.",
+            "Use emojis to make responses friendly and engaging.",
+        ],
+        tools=[
+            search_pools,
+            get_pool_data,
+            get_pool_ohlcv,
+            get_trending_pools,
+            get_ticker_price,
+            get_24hr_ticker,
+            get_klines,
+            evaluate_trade_risk,
+            validate_trade_parameters,
+            compare_pools,
+            compare_tokens,
+            check_tool_status,
+        ],
+        markdown=True,
+        show_tool_calls=False,  # Hide internal tool calls from user
+        temperature=0.7,
+    )
+
+
 async def handle_websocket(websocket):
-    """Handle incoming WebSocket connections and stream Groq responses."""
+    """Handle incoming WebSocket connections and stream Agno agent responses."""
     try:
         # Verify origin
         origin = websocket.request_headers.get("Origin", "")
@@ -77,7 +130,8 @@ async def handle_websocket(websocket):
             await websocket.send("[DONE]")
             return
 
-        client = AsyncGroq(api_key=GROQ_API_KEY)
+        # Create agent instance
+        agent = create_zyrex_agent()
 
         async for message in websocket:
             try:
@@ -91,36 +145,34 @@ async def handle_websocket(websocket):
                     await websocket.send("[DONE]")
                     continue
 
-                messages = [
-                    {"role": "system", "content": SYSTEM_INSTRUCTION},
-                ]
-
-                # Add history (last 8 messages)
+                # Build conversation context from history
+                conversation_context = []
                 for entry in history[-8:]:
                     if entry and isinstance(entry.get("text"), str) and entry["text"].strip():
-                        role = "user" if entry.get("role") == "user" else "assistant"
-                        messages.append({"role": role, "content": entry["text"].strip()})
+                        role = entry.get("role", "user")
+                        conversation_context.append(f"{role}: {entry['text'].strip()}")
 
-                # Add current prompt
-                messages.append({
-                    "role": "user",
-                    "content": f"Mode: {mode}\n\nUser question: {prompt}"
-                })
+                # Add mode and current prompt
+                full_prompt = f"Mode: {mode}\n\n"
+                if conversation_context:
+                    full_prompt += "Previous conversation:\n" + "\n".join(conversation_context) + "\n\n"
+                full_prompt += f"Current question: {prompt}"
 
-                # Stream response from Groq
-                stream = await client.chat.completions.create(
-                    model=MODEL_ID,
-                    messages=messages,
-                    temperature=0.7,
-                    max_tokens=2000,
-                    stream=True
-                )
+                # Stream response from Agno agent
+                try:
+                    async for event in agent.arun(
+                        full_prompt,
+                        stream=True,
+                        stream_events=False  # Only stream content, not internal events
+                    ):
+                        if event.event == RunEvent.run_content and event.content:
+                            await websocket.send(event.content)
 
-                async for chunk in stream:
-                    if chunk.choices and chunk.choices[0].delta.content:
-                        await websocket.send(chunk.choices[0].delta.content)
+                    await websocket.send("[DONE]")
 
-                await websocket.send("[DONE]")
+                except Exception as agent_error:
+                    await websocket.send(json.dumps({"error": f"Agent error: {str(agent_error)}"}))
+                    await websocket.send("[DONE]")
 
             except json.JSONDecodeError:
                 await websocket.send(json.dumps({"error": "Invalid JSON payload"}))
