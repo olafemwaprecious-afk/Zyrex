@@ -21,7 +21,8 @@ async def check_tool_status() -> str:
     status_checks = {
         "timestamp": datetime.now().isoformat(),
         "agent_configuration": {
-            "tool_choice": "auto",  # Explicitly configured in main.py
+            "tool_choice": "dynamic (auto for data requests, none for conversation)",
+            "tool_selection_logic": "Keyword-based detection of market data requests",
             "tools_registered": [
                 "search_pools",
                 "get_pool_data",

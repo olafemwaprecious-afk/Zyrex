@@ -86,7 +86,50 @@ async def keep_awake():
         await asyncio.sleep(660)  # 11 minutes = 660 seconds
 
 
-def create_zyrex_agent():
+def requires_market_data(prompt: str) -> bool:
+    """
+    Detect if a prompt requires market data tools.
+
+    Returns True if the user is asking for:
+    - Current prices/rates
+    - Market data/statistics
+    - Token information
+    - Pool data
+    - Trade validation with specific parameters
+    - Tool status check
+
+    Returns False for:
+    - General trading concepts
+    - Greetings/conversation
+    - Strategy questions without data
+    """
+    prompt_lower = prompt.lower()
+
+    # Keywords that indicate market data is needed
+    data_keywords = [
+        "price", "rate", "cost", "value", "current", "latest",
+        "market data", "ticker", "candle", "ohlcv", "volume",
+        "pool", "token", "exchange", "symbol",
+        "validate trade", "evaluate risk", "check tool status",
+        "search pool", "trending", "compare",
+        "btc", "eth", "sol", "usdt", "usd", "/",
+    ]
+
+    # Check if any data keywords are present
+    has_data_keyword = any(keyword in prompt_lower for keyword in data_keywords)
+
+    # Exclude if it's just a greeting or simple conversation
+    greetings = ["hey", "hi", "hello", "thanks", "thank you", "bye", "goodbye"]
+    is_greeting = any(greeting in prompt_lower for greeting in greetings)
+
+    # Also exclude very short prompts that are likely greetings
+    is_very_short = len(prompt.strip()) < 10
+
+    # Only use tools if it has data keywords AND is not a simple greeting
+    return has_data_keyword and not is_greeting and not is_very_short
+
+
+def create_zyrex_agent(tool_choice_mode: str = "auto"):
     """Create and configure the ZYREX agent with Agno and Groq."""
     agent = Agent(
         model=Groq(id=MODEL_ID, api_key=GROQ_API_KEY),
@@ -118,14 +161,14 @@ def create_zyrex_agent():
             compare_tokens,
             check_tool_status,
         ],
-        tool_choice="auto",  # Explicitly enable automatic tool selection
+        tool_choice=tool_choice_mode,  # Dynamic: "auto" for data, "none" for conversation
         markdown=True,
         show_tool_calls=False,  # Hide internal tool calls from user
         temperature=0.7,
     )
     # Log only if agent is a real Agent object (not mocked in tests)
     if hasattr(agent, 'tools'):
-        logger.info("Agent configured with tool_choice=auto and %d tools", len(agent.tools))
+        logger.info("Agent configured with tool_choice=%s and %d tools", tool_choice_mode, len(agent.tools))
     return agent
 
 
@@ -145,13 +188,6 @@ async def handle_websocket(websocket):
             await websocket.send(json.dumps({"error": "Groq API key is missing"}))
             await websocket.send("[DONE]")
             return
-
-        # Create agent instance
-        agent = create_zyrex_agent()
-        tools_count = len(agent.tools) if hasattr(agent, 'tools') else 0
-        tool_choice = getattr(agent, 'tool_choice', 'not_set')
-        logger.info("request_id=%s status=agent_created tool_choice=%s tools_count=%d",
-                    request_id, tool_choice, tools_count)
 
         async for message in websocket:
             try:
@@ -181,6 +217,15 @@ async def handle_websocket(websocket):
                 if conversation_context:
                     full_prompt += "Previous conversation:\n" + "\n".join(conversation_context) + "\n\n"
                 full_prompt += f"Current question: {prompt}"
+
+                # Determine if tools are needed based on the prompt
+                needs_tools = requires_market_data(prompt)
+                tool_choice_mode = "auto" if needs_tools else "none"
+                logger.info("request_id=%s status=tool_choice_decision needs_tools=%s tool_choice=%s",
+                            request_id, needs_tools, tool_choice_mode)
+
+                # Create agent with appropriate tool_choice for this request
+                agent = create_zyrex_agent(tool_choice_mode=tool_choice_mode)
 
                 # Stream response from Agno agent
                 try:
