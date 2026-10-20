@@ -2,11 +2,17 @@ import os
 import asyncio
 import json
 import http
+import uuid
+import logging
 from websockets.server import serve
 from agno.agent import Agent, RunEvent
 from agno.models.groq import Groq
 from agno.tools import tool
 import httpx
+
+# Configure logging for diagnostics
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 from tools import (
     search_pools,
@@ -82,7 +88,7 @@ async def keep_awake():
 
 def create_zyrex_agent():
     """Create and configure the ZYREX agent with Agno and Groq."""
-    return Agent(
+    agent = Agent(
         model=Groq(id=MODEL_ID, api_key=GROQ_API_KEY),
         description=SYSTEM_INSTRUCTION,
         instructions=[
@@ -112,28 +118,40 @@ def create_zyrex_agent():
             compare_tokens,
             check_tool_status,
         ],
+        tool_choice="auto",  # Explicitly enable automatic tool selection
         markdown=True,
         show_tool_calls=False,  # Hide internal tool calls from user
         temperature=0.7,
     )
+    # Log only if agent is a real Agent object (not mocked in tests)
+    if hasattr(agent, 'tools'):
+        logger.info("Agent configured with tool_choice=auto and %d tools", len(agent.tools))
+    return agent
 
 
 async def handle_websocket(websocket):
     """Handle incoming WebSocket connections and stream Agno agent responses."""
+    request_id = str(uuid.uuid4())[:8]  # Short correlation ID for logging
     try:
         # Verify origin
         origin = websocket.request_headers.get("Origin", "")
         if origin != ALLOWED_ORIGIN:
+            logger.warning("request_id=%s origin_denied=%s", request_id, origin)
             await websocket.close(code=1008, reason="Origin not allowed")
             return
 
         if not GROQ_API_KEY:
+            logger.error("request_id=%s status=groq_key_missing", request_id)
             await websocket.send(json.dumps({"error": "Groq API key is missing"}))
             await websocket.send("[DONE]")
             return
 
         # Create agent instance
         agent = create_zyrex_agent()
+        tools_count = len(agent.tools) if hasattr(agent, 'tools') else 0
+        tool_choice = getattr(agent, 'tool_choice', 'not_set')
+        logger.info("request_id=%s status=agent_created tool_choice=%s tools_count=%d",
+                    request_id, tool_choice, tools_count)
 
         async for message in websocket:
             try:
@@ -143,9 +161,13 @@ async def handle_websocket(websocket):
                 history = data.get("history", [])
 
                 if not prompt:
+                    logger.warning("request_id=%s status=empty_prompt", request_id)
                     await websocket.send(json.dumps({"error": "A message is required"}))
                     await websocket.send("[DONE]")
                     continue
+
+                logger.info("request_id=%s status=request_received mode=%s prompt_length=%d",
+                            request_id, mode, len(prompt))
 
                 # Build conversation context from history
                 conversation_context = []
@@ -162,6 +184,8 @@ async def handle_websocket(websocket):
 
                 # Stream response from Agno agent
                 try:
+                    logger.info("request_id=%s status=agent_run_start", request_id)
+                    tool_calls_made = False
                     async for event in agent.arun(
                         full_prompt,
                         stream=True,
@@ -169,24 +193,35 @@ async def handle_websocket(websocket):
                     ):
                         if event.event == RunEvent.run_content and event.content:
                             await websocket.send(event.content)
+                            # Detect if content looks like a tool result (JSON with source field)
+                            if '"source"' in event.content and ('CoinAPI' in event.content or 'GeckoTerminal' in event.content):
+                                tool_calls_made = True
+                                logger.info("request_id=%s status=tool_result_detected source_detected=true",
+                                            request_id)
 
+                    logger.info("request_id=%s status=agent_run_complete tool_calls_made=%s",
+                                request_id, tool_calls_made)
                     await websocket.send("[DONE]")
 
                 except Exception as agent_error:
-                    print(f"Agent request failed: {type(agent_error).__name__}")
+                    logger.error("request_id=%s status=agent_error error_type=%s",
+                                 request_id, type(agent_error).__name__)
                     await websocket.send(json.dumps({"error": "The assistant could not complete this request. Please try again later."}))
                     await websocket.send("[DONE]")
 
             except json.JSONDecodeError:
+                logger.warning("request_id=%s status=invalid_json", request_id)
                 await websocket.send(json.dumps({"error": "Invalid JSON payload"}))
                 await websocket.send("[DONE]")
             except Exception as e:
-                print(f"WebSocket message failed: {type(e).__name__}")
+                logger.error("request_id=%s status=websocket_message_error error_type=%s",
+                             request_id, type(e).__name__)
                 await websocket.send(json.dumps({"error": "The request could not be processed."}))
                 await websocket.send("[DONE]")
 
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error("request_id=%s status=websocket_connection_error error_type=%s",
+                     request_id, type(e).__name__)
     finally:
         await websocket.close()
 

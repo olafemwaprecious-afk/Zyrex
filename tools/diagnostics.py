@@ -20,6 +20,24 @@ async def check_tool_status() -> str:
     """
     status_checks = {
         "timestamp": datetime.now().isoformat(),
+        "agent_configuration": {
+            "tool_choice": "auto",  # Explicitly configured in main.py
+            "tools_registered": [
+                "search_pools",
+                "get_pool_data",
+                "get_pool_ohlcv",
+                "get_trending_pools",
+                "get_ticker_price",
+                "get_24hr_ticker",
+                "get_klines",
+                "evaluate_trade_risk",
+                "validate_trade_parameters",
+                "compare_pools",
+                "compare_tokens",
+                "check_tool_status",
+            ],
+            "model": os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b"),
+        },
         "integrations": {}
     }
 
