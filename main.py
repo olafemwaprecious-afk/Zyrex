@@ -219,13 +219,26 @@ async def handle_websocket(websocket):
                 full_prompt += f"Current question: {prompt}"
 
                 # Determine if tools are needed based on the prompt
-                needs_tools = requires_market_data(prompt)
-                tool_choice_mode = "auto" if needs_tools else "none"
-                logger.info("request_id=%s status=tool_choice_decision needs_tools=%s tool_choice=%s",
-                            request_id, needs_tools, tool_choice_mode)
+                try:
+                    needs_tools = requires_market_data(prompt)
+                    tool_choice_mode = "auto" if needs_tools else "none"
+                    logger.info("request_id=%s status=tool_choice_decision needs_tools=%s tool_choice=%s",
+                                request_id, needs_tools, tool_choice_mode)
+                except Exception as e:
+                    logger.error("request_id=%s status=tool_detection_error error_details=%s",
+                                 request_id, str(e))
+                    # Default to none if detection fails
+                    tool_choice_mode = "none"
 
                 # Create agent with appropriate tool_choice for this request
-                agent = create_zyrex_agent(tool_choice_mode=tool_choice_mode)
+                try:
+                    agent = create_zyrex_agent(tool_choice_mode=tool_choice_mode)
+                except Exception as e:
+                    logger.error("request_id=%s status=agent_creation_error error_details=%s",
+                                 request_id, str(e))
+                    await websocket.send(json.dumps({"error": "Failed to initialize agent. Please try again."}))
+                    await websocket.send("[DONE]")
+                    continue
 
                 # Stream response from Agno agent
                 try:
@@ -249,8 +262,8 @@ async def handle_websocket(websocket):
                     await websocket.send("[DONE]")
 
                 except Exception as agent_error:
-                    logger.error("request_id=%s status=agent_error error_type=%s",
-                                 request_id, type(agent_error).__name__)
+                    logger.error("request_id=%s status=agent_error error_type=%s error_details=%s",
+                                 request_id, type(agent_error).__name__, str(agent_error))
                     await websocket.send(json.dumps({"error": "The assistant could not complete this request. Please try again later."}))
                     await websocket.send("[DONE]")
 
@@ -259,14 +272,14 @@ async def handle_websocket(websocket):
                 await websocket.send(json.dumps({"error": "Invalid JSON payload"}))
                 await websocket.send("[DONE]")
             except Exception as e:
-                logger.error("request_id=%s status=websocket_message_error error_type=%s",
-                             request_id, type(e).__name__)
+                logger.error("request_id=%s status=websocket_message_error error_type=%s error_details=%s",
+                             request_id, type(e).__name__, str(e))
                 await websocket.send(json.dumps({"error": "The request could not be processed."}))
                 await websocket.send("[DONE]")
 
     except Exception as e:
-        logger.error("request_id=%s status=websocket_connection_error error_type=%s",
-                     request_id, type(e).__name__)
+        logger.error("request_id=%s status=websocket_connection_error error_type=%s error_details=%s",
+                     request_id, type(e).__name__, str(e))
     finally:
         await websocket.close()
 
