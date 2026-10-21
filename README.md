@@ -132,6 +132,28 @@ The backend is deployed on Render at: https://zyrex-mpya.onrender.com
 - **Python Version:** Latest supported by Render
 - **Dependencies:** Defined in `requirements.txt`
 
+### Keep-Alive Configuration
+
+**Important:** Render's free tier spins down instances after 15 minutes of inactivity. The built-in `keep_awake()` function in main.py pings the server from within, but this does NOT prevent spin-down because it's internal traffic.
+
+**To keep your instance awake, use an external monitoring service:**
+
+1. **UptimeRobot (Free, Recommended):**
+   - Go to https://uptimerobot.com/
+   - Create a free account
+   - Add a new monitor:
+     - **Monitor Type:** HTTP(s)
+     - **URL:** `https://zyrex-mpya.onrender.com/health`
+     - **Monitoring Interval:** 5 minutes (free tier minimum)
+   - This external ping will keep your Render instance awake
+
+2. **Alternative External Services:**
+   - Pingdom (free tier available)
+   - StatusCake (free tier available)
+   - cron-job.org (for cron-based pings)
+
+**Note:** The built-in `keep_awake()` function is kept in the code for redundancy, but external pinging is required for reliable keep-alive on Render's free tier.
+
 ### Environment Variables on Render
 
 Add these in Render → Environment:

@@ -75,14 +75,23 @@ Style:
 
 
 async def keep_awake():
-    """Silent background task to keep the Render instance awake by pinging itself every 11 minutes."""
+    """
+    Legacy keep-awake task - NOTE: This does NOT prevent Render spin-down.
+
+    Render's free tier spins down after 15 minutes of inactivity regardless of
+    internal self-pings. External monitoring services (UptimeRobot, Pingdom, etc.)
+    are required to keep the instance awake.
+
+    This function is kept for potential future use or redundancy, but should not
+    be relied upon for Render keep-alive.
+    """
     while True:
         try:
             async with httpx.AsyncClient() as client:
                 await client.get(KEEP_AWAKE_URL, timeout=10.0)
-        except Exception:
-            # Silently ignore all network errors to prevent crashing the main server
-            pass
+                logger.info("keep_awake: self-ping successful (does not prevent Render spin-down)")
+        except Exception as e:
+            logger.warning("keep_awake: self-ping failed (expected if instance is spun down): %s", str(e))
         await asyncio.sleep(660)  # 11 minutes = 660 seconds
 
 
