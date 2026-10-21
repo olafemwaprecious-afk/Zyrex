@@ -31,7 +31,7 @@ from tools import (
 
 PORT = int(os.environ.get("PORT", 8080))
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-MODEL_ID = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
+MODEL_ID = os.environ.get("GROQ_MODEL", "llama-3.1-70b-versatile")
 ALLOWED_ORIGIN = "https://zyrex.wasmer.app"
 KEEP_AWAKE_URL = "https://zyrex-mpya.onrender.com/health"
 
