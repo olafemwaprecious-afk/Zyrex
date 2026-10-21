@@ -172,7 +172,6 @@ def create_zyrex_agent(tool_choice_mode: str = "auto"):
         ],
         tool_choice=tool_choice_mode,  # Dynamic: "auto" for data, "none" for conversation
         markdown=True,
-        show_tool_calls=False,  # Hide internal tool calls from user
         temperature=0.7,
     )
     # Log only if agent is a real Agent object (not mocked in tests)
