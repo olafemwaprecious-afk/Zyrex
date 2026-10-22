@@ -183,6 +183,7 @@ def create_zyrex_agent(tool_choice_mode: str = "auto"):
 async def handle_websocket(websocket):
     """Handle incoming WebSocket connections and stream Agno agent responses."""
     request_id = str(uuid.uuid4())[:8]  # Short correlation ID for logging
+    logger.info("request_id=%s status=websocket_connected origin=%s", request_id, websocket.request_headers.get("Origin", "unknown"))
     try:
         # Verify origin
         origin = websocket.request_headers.get("Origin", "")
@@ -197,12 +198,16 @@ async def handle_websocket(websocket):
             await websocket.send("[DONE]")
             return
 
+        logger.info("request_id=%s status=waiting_for_messages", request_id)
         async for message in websocket:
             try:
+                logger.info("request_id=%s status=message_received raw_message_length=%d", request_id, len(message))
                 data = json.loads(message)
                 prompt = data.get("prompt", data.get("message", "")).strip()
                 mode = data.get("mode", "analyst")
                 history = data.get("history", [])
+                logger.info("request_id=%s status=message_parsed prompt_preview=%s mode=%s history_count=%d",
+                            request_id, (prompt[:50] + "...") if len(prompt) > 50 else prompt, mode, len(history))
 
                 if not prompt:
                     logger.warning("request_id=%s status=empty_prompt", request_id)
