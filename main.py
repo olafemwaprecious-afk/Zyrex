@@ -200,7 +200,7 @@ async def handle_websocket(websocket):
         async for message in websocket:
             try:
                 data = json.loads(message)
-                prompt = data.get("prompt", "").strip()
+                prompt = data.get("prompt", data.get("message", "")).strip()
                 mode = data.get("mode", "analyst")
                 history = data.get("history", [])
 
