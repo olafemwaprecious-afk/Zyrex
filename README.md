@@ -1,48 +1,28 @@
 # ZYREX Backend
 
-Agentic Trading Intelligence API for ZYREX AI powered by Agno + Groq.
+Text-chat backend for ZYREX AI powered by Agno + Groq.
 
 ## Overview
 
-This is the Python backend server for ZYREX AI. It provides:
-- **Agno agent framework** for agentic tool calling and reasoning
+This is the Python backend server for ZYREX AI. Its active baseline provides:
+- **Agno + Groq** for text-only model inference
 - **Groq API integration** for fast LLM inference
-- **Market data tools**: GeckoTerminal (DEX) and CoinAPI (CEX) APIs
-- **Risk checking engine**: Deterministic trade validation and risk calculations
+- **Retained trading modules**: GeckoTerminal, CoinAPI, risk checking, and comparison code (not registered in the active agent)
 - **WebSocket streaming**: Real-time response streaming to the frontend
-- **Keep-alive system**: Automatic self-ping for Render deployment
 - **Health checks**: Endpoint for deployment monitoring
 
-## Architecture
+## Current request path
 
-The backend uses an agentic architecture:
-
-1. **User Request** → WebSocket → ZYREX Backend
-2. **Agno Agent** receives the request with conversation history
-3. **Tool Selection**: Agent decides when to use tools based on context
-4. **Tool Execution**: Market data, risk checking, or comparison tools run
-5. **Result Integration**: Tool results feed back into the agent's reasoning
-6. **Response Generation**: Agent produces final answer with tool-informed insights
-7. **Streaming**: Response streams incrementally through WebSocket to frontend
-
-### Available Tools
-
-- **GeckoTerminal Tools**: Search pools, get pool data, OHLCV charts, trending pools
-- **CoinAPI Tools**: Exchange rates, ticker data, OHLCV candlestick data
-- **Risk Checker**: Trade validation, risk amount calculation, reward-to-risk ratio
-- **Market Comparison**: Compare pools and tokens across different sources
-- **Diagnostics**: Check operational status of all integrations
+One text prompt is sent over a WebSocket connection, passed to an Agno/Groq agent with no registered tools, and streamed back as text frames followed by `[DONE]`. Conversation history, market-data tools, dynamic tool selection, and the background self-ping are disabled in this baseline; their source modules are retained.
 
 ## Environment Variables
 
 Required environment variables (see `.env.example`):
 
 - `GROQ_API_KEY` - Your Groq API key (required)
-- `COINAPI_KEY` - Your CoinAPI key (required for CEX market data)
-- `GROQ_MODEL` - Groq model ID (default: `openai/gpt-oss-120b`)
+- `GROQ_MODEL` - Groq model ID (default: `llama-3.3-70b-versatile`)
 - `PORT` - Server port (default: 8080)
-- `ALLOWED_ORIGIN` - Frontend origin for CORS (default: `https://zyrex.wasmer.app`)
-- `KEEP_AWAKE_URL` - URL for keep-alive self-ping (default: Render deployment URL)
+- `COINAPI_KEY` - Retained for later market-data restoration; unused by the baseline
 
 ## Setup
 
@@ -58,7 +38,7 @@ Required environment variables (see `.env.example`):
    cp .env.example .env
    ```
 
-2. Add your API keys to `.env`:
+2. Set `GROQ_API_KEY` in `.env`. `COINAPI_KEY` is optional and unused by the current baseline:
    ```
    GROQ_API_KEY=your_groq_api_key_here
    COINAPI_KEY=your_coinapi_key_here
@@ -97,19 +77,13 @@ The backend uses WebSocket for real-time streaming:
 **Request:**
 ```json
 {
-  "prompt": "What is the current price of BTC?",
+  "prompt": "What is a liquidity sweep?",
   "mode": "analyst",
-  "history": [
-    { "role": "user", "text": "Previous message" },
-    { "role": "assistant", "text": "Previous response" }
-  ]
+  "history": []
 }
 ```
 
-**Response Stream:**
-- Text chunks sent incrementally
-- Ends with `[DONE]` marker
-- Errors sent as JSON before `[DONE]`
+`mode` and `history` are accepted but ignored by the minimal baseline. Each WebSocket connection handles one prompt. Text chunks arrive in order, followed by `[DONE]`; an error is sent as a JSON frame followed by `[DONE]`.
 
 ### Health Check
 
@@ -132,38 +106,13 @@ The backend is deployed on Render at: https://zyrex-mpya.onrender.com
 - **Python Version:** Latest supported by Render
 - **Dependencies:** Defined in `requirements.txt`
 
-### Keep-Alive Configuration
-
-**Important:** Render's free tier spins down instances after 15 minutes of inactivity. The built-in `keep_awake()` function in main.py pings the server from within, but this does NOT prevent spin-down because it's internal traffic.
-
-**To keep your instance awake, use an external monitoring service:**
-
-1. **UptimeRobot (Free, Recommended):**
-   - Go to https://uptimerobot.com/
-   - Create a free account
-   - Add a new monitor:
-     - **Monitor Type:** HTTP(s)
-     - **URL:** `https://zyrex-mpya.onrender.com/health`
-     - **Monitoring Interval:** 5 minutes (free tier minimum)
-   - This external ping will keep your Render instance awake
-
-2. **Alternative External Services:**
-   - Pingdom (free tier available)
-   - StatusCake (free tier available)
-   - cron-job.org (for cron-based pings)
-
-**Note:** The built-in `keep_awake()` function is kept in the code for redundancy, but external pinging is required for reliable keep-alive on Render's free tier.
-
 ### Environment Variables on Render
 
 Add these in Render → Environment:
 
 1. `GROQ_API_KEY` - Your Groq API key (required)
-2. `COINAPI_KEY` - Your CoinAPI key (required for CoinAPI market data)
-3. `GROQ_MODEL` - `openai/gpt-oss-120b` (optional, has default)
-4. `PORT` - Render sets this automatically (optional)
-5. `ALLOWED_ORIGIN` - `https://zyrex.wasmer.app` (optional, has default)
-6. `KEEP_AWAKE_URL` - `https://zyrex-mpya.onrender.com/health` (optional, has default)
+2. `GROQ_MODEL` - `llama-3.3-70b-versatile` (set this exact value)
+3. `PORT` - Render sets this automatically
 
 ### Deployment Steps
 
@@ -180,7 +129,7 @@ Add these in Render → Environment:
 - **Base URL:** `https://api.geckoterminal.com/api/v2`
 - **Rate Limit:** ~30 calls/minute (public API)
 - **Authentication:** Not required for public endpoints
-- **Required for MVP:** Yes (free tier sufficient)
+- **Active in the text-only baseline:** No; retained for later restoration
 - **Environment Variable:** None required
 
 ### CoinAPI (Aggregated Rates and CEX OHLCV)
@@ -202,6 +151,8 @@ Add these in Render → Environment:
 - **Authentication:** Required via API key
 - **Required for MVP:** Yes
 - **Environment Variable:** `GROQ_API_KEY` (required)
+- **Required model ID:** `llama-3.3-70b-versatile`
+- **Render environment:** Set `GROQ_MODEL` to that exact value and verify account access before claiming generation works
 - **Get Key:** https://console.groq.com/keys
 
 ## Security
@@ -215,18 +166,14 @@ Add these in Render → Environment:
 
 ## Current Implementation
 
-### What's Implemented Now
+### Active baseline
 
 - ✅ Agno + Groq agent integration
-- ✅ GeckoTerminal market data tools
-- ✅ CoinAPI aggregated exchange rates and venue-specific OHLCV tools
-- ✅ Deterministic risk checking engine
-- ✅ Market comparison tools
+- ✅ Text-only single-prompt request path
 - ✅ WebSocket streaming protocol
-- ✅ Keep-alive for Render
 - ✅ Health check endpoint
-- ✅ Comprehensive test suite
-- ✅ Tool status diagnostics
+
+Trading tool implementations remain in `tools/` but are disconnected from the active agent.
 
 ### Deferred to Later Phases
 
@@ -266,9 +213,9 @@ pip install -r requirements.txt
 - HTTP 429: the subscription request quota has been reached; wait before retrying and check current plan limits.
 - Timeouts or provider outages: retry later; errors do not include request headers or credential values.
 
-### Testing CoinAPI
+### Testing
 
-Run `python -m pytest -q`. CoinAPI tests use mocked HTTP responses and do not consume API quota. For a live smoke test, ask ZYREX: "What is the current BTC/USDT price?" The agent should call the aggregated exchange-rate tool and identify the source and provider timestamp; it must explain an access or provider error instead of inventing a price.
+Run `python -m unittest discover -s tests -v` for the WebSocket and request-contract tests. A real model-access check is separate and requires a valid server-side `GROQ_API_KEY`.
 
 ## Development
 
@@ -288,11 +235,7 @@ ZYREX BACKEND/
 │   ├── market_comparison.py
 │   └── diagnostics.py
 └── tests/                # Test suite
-    ├── test_main.py
-    ├── test_risk_checker.py
-    ├── test_market_comparison.py
-    ├── test_geckoterminal.py
-   └── test_coinapi.py
+    └── test_main.py
 ```
 
 ### Adding New Tools
@@ -300,8 +243,8 @@ ZYREX BACKEND/
 1. Create tool function in `tools/` directory
 2. Add docstring with parameters and return format
 3. Import in `tools/__init__.py`
-4. Add to agent tools list in `main.py`
-5. Write tests in `tests/`
+4. Restore/register one tool only as a separate incremental change
+5. Write tests in `tests/` and verify before restoring the next feature
 
 ## License
 

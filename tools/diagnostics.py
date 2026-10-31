@@ -21,9 +21,10 @@ async def check_tool_status() -> str:
     status_checks = {
         "timestamp": datetime.now().isoformat(),
         "agent_configuration": {
-            "tool_choice": "dynamic (auto for data requests, none for conversation)",
-            "tool_selection_logic": "Keyword-based detection of market data requests",
-            "tools_registered": [
+            "tool_choice": "disabled (text-only baseline)",
+            "tool_selection_logic": "disabled",
+            "tools_registered": [],
+            "retained_tools": [
                 "search_pools",
                 "get_pool_data",
                 "get_pool_ohlcv",
@@ -37,7 +38,7 @@ async def check_tool_status() -> str:
                 "compare_tokens",
                 "check_tool_status",
             ],
-            "model": os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b"),
+            "model": os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
         },
         "integrations": {}
     }
