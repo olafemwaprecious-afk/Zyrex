@@ -1,320 +1,298 @@
-import os
 import asyncio
 import json
-import http
-import uuid
 import logging
-from websockets.server import serve
+import os
+import re
+import uuid
+from http import HTTPStatus
+from urllib.parse import urlsplit
 from agno.agent import Agent, RunEvent
 from agno.models.groq import Groq
-from agno.tools import tool
-import httpx
+from dotenv import load_dotenv
+from websockets.asyncio.server import ServerConnection, serve
+from websockets.datastructures import Headers
+from websockets.http11 import Request, Response
+from websockets.exceptions import ConnectionClosed
 
-# Configure logging for diagnostics
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 logger = logging.getLogger(__name__)
 
-from tools import (
-    search_pools,
-    get_pool_data,
-    get_pool_ohlcv,
-    get_trending_pools,
-    get_ticker_price,
-    get_24hr_ticker,
-    get_klines,
-    evaluate_trade_risk,
-    validate_trade_parameters,
-    compare_pools,
-    compare_tokens,
-    check_tool_status,
-)
+load_dotenv()
 
 PORT = int(os.environ.get("PORT", 8080))
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-MODEL_ID = os.environ.get("GROQ_MODEL", "llama-3.1-70b-versatile")
+MODEL_ID = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 ALLOWED_ORIGIN = "https://zyrex.wasmer.app"
-KEEP_AWAKE_URL = "https://zyrex-mpya.onrender.com/health"
 
 SYSTEM_INSTRUCTION = """You are ZYREX AI, a trading-focused assistant.
+Explain trading concepts clearly without claiming access to live market data,
+personal trading data, or certainty about future market moves."""
 
-Purpose:
-- Explain trading concepts clearly for beginners and intermediate traders.
-- Focus on market structure, liquidity, risk management, execution, psychology, and setup analysis.
-- Do not claim personal trading data or fabricate account history.
-- Do not guarantee profits or claim certainty about future market moves.
-- Do not invent trades, PnL, analytics, or market data.
-- If personal trading data is unavailable, say that the personal trading data is not currently connected.
-
-Trading Context and Terminology:
-- When explaining trading concepts, prioritize the price-action/discretionary trading meaning over market-microstructure meanings.
-- For terms like "liquidity sweep", "order block", "fair value gap", "market structure", "break of structure", "change of character", "stop hunt", "imbalance", and "displacement", use the Smart Money Concepts (SMC)/ICT-style price-action interpretation when the user is discussing chart analysis.
-- Use order-book or market-microstructure meanings only when the user explicitly asks about order execution, order books, bid/ask liquidity, or market microstructure.
-- If a term is genuinely ambiguous, briefly mention the distinction rather than giving the wrong meaning.
-
-Teaching Style:
-- Be conversational and clean.
-- Use simple explanations suitable for beginner and intermediate traders.
-- When introducing a concept: define it, give a simple example, explain what the trader sees on the chart, and explain why it matters.
-- Do not teach trading myths as absolute facts. Use language like "traders commonly describe this as", "may be", "is often called", rather than presenting interpretive concepts as guaranteed truths.
-- For liquidity sweeps: explain that price moves beyond a significant high/low to interact with liquidity, but emphasize that a sweep does NOT guarantee a reversal.
-
-Style:
-- Use brief paragraphs and bullets when helpful.
-- You may use Markdown formatting (headings, bold, lists, code blocks) for clarity—the frontend will render it properly.
-- Do NOT use HTML tags like <br>, <div>, <span>, etc. Use Markdown instead: double line breaks for paragraphs, or bullet lists.
-- For tables, use proper Markdown table syntax with | separators and a header separator row. Example:
-  | Step | What to check |
-  |------|--------------|
-  | 1️⃣ Identify | Description |
-  | 2️⃣ Observe | Description |
-- Use emojis to make responses friendly and engaging (e.g., 💡 for tips, 📊 for data, ⚠️ for warnings, ✅ for confirmations).
-- Do not force every response into a huge Markdown document.
-- Do not start every response with ## or ###.
-- Do not wrap the entire response in **.
-- Do not return raw JSON."""
+_BEARER_SECRET = re.compile(r"(?i)(bearer\s+)[^\s,;\"']+")
+_API_KEY_FIELD = re.compile(r"(?i)(api[_-]?key\s*[:=]\s*)[^\s,;\"']+")
+_GROQ_KEY = re.compile(r"\bgsk_[A-Za-z0-9_-]+\b")
 
 
-async def keep_awake():
-    """
-    Legacy keep-awake task - NOTE: This does NOT prevent Render spin-down.
-
-    Render's free tier spins down after 15 minutes of inactivity regardless of
-    internal self-pings. External monitoring services (UptimeRobot, Pingdom, etc.)
-    are required to keep the instance awake.
-
-    This function is kept for potential future use or redundancy, but should not
-    be relied upon for Render keep-alive.
-    """
-    while True:
-        try:
-            async with httpx.AsyncClient() as client:
-                await client.get(KEEP_AWAKE_URL, timeout=10.0)
-                logger.info("keep_awake: self-ping successful (does not prevent Render spin-down)")
-        except Exception as e:
-            logger.warning("keep_awake: self-ping failed (expected if instance is spun down): %s", str(e))
-        await asyncio.sleep(660)  # 11 minutes = 660 seconds
+class EmptyPromptError(ValueError):
+    pass
 
 
-def requires_market_data(prompt: str) -> bool:
-    """
-    Detect if a prompt requires market data tools.
-
-    Returns True if the user is asking for:
-    - Current prices/rates
-    - Market data/statistics
-    - Token information
-    - Pool data
-    - Trade validation with specific parameters
-    - Tool status check
-
-    Returns False for:
-    - General trading concepts
-    - Greetings/conversation
-    - Strategy questions without data
-    """
-    prompt_lower = prompt.lower()
-
-    # Keywords that indicate market data is needed
-    data_keywords = [
-        "price", "rate", "cost", "value", "current", "latest",
-        "market data", "ticker", "candle", "ohlcv", "volume",
-        "pool", "token", "exchange", "symbol",
-        "validate trade", "evaluate risk", "check tool status",
-        "search pool", "trending", "compare",
-        "btc", "eth", "sol", "usdt", "usd", "/",
-    ]
-
-    # Check if any data keywords are present
-    has_data_keyword = any(keyword in prompt_lower for keyword in data_keywords)
-
-    # Exclude if it's just a greeting or simple conversation
-    greetings = ["hey", "hi", "hello", "thanks", "thank you", "bye", "goodbye"]
-    is_greeting = any(greeting in prompt_lower for greeting in greetings)
-
-    # Also exclude very short prompts that are likely greetings
-    is_very_short = len(prompt.strip()) < 10
-
-    # Only use tools if it has data keywords AND is not a simple greeting
-    return has_data_keyword and not is_greeting and not is_very_short
+def _response(status: HTTPStatus, body: str) -> Response:
+    body_bytes = body.encode("utf-8")
+    headers = Headers(
+        [
+            ("Content-Type", "text/plain; charset=utf-8"),
+            ("Content-Length", str(len(body_bytes))),
+        ]
+    )
+    return Response(status.value, status.phrase, headers, body_bytes)
 
 
-def create_zyrex_agent(tool_choice_mode: str = "auto"):
-    """Create and configure the ZYREX agent with Agno and Groq."""
+def process_request(
+    connection: ServerConnection, request: Request
+) -> Response | None:
+    """Serve health checks and reject invalid paths or WebSocket origins."""
+    path = urlsplit(request.path).path
+    origin = request.headers.get("Origin", "")
+
+    if path == "/health":
+        logger.info(
+            "status=http_health_response path=%s origin=%s http_status=%d",
+            path,
+            origin or "none",
+            HTTPStatus.OK,
+        )
+        return _response(HTTPStatus.OK, "ZYREX Engine Online")
+
+    if path != "/":
+        logger.warning(
+            "status=http_request_rejected path=%s origin=%s http_status=%d",
+            path,
+            origin or "none",
+            HTTPStatus.NOT_FOUND,
+        )
+        return _response(HTTPStatus.NOT_FOUND, "Not Found")
+
+    is_websocket_upgrade = (
+        request.headers.get("Upgrade", "").lower() == "websocket"
+    )
+    if is_websocket_upgrade and origin != ALLOWED_ORIGIN:
+        logger.warning(
+            "status=websocket_rejected path=%s origin=%s reason=origin_mismatch http_status=%d",
+            path,
+            origin or "none",
+            HTTPStatus.FORBIDDEN,
+        )
+        return _response(HTTPStatus.FORBIDDEN, "Origin not allowed")
+
+    return None
+
+
+def log_handshake_response(
+    connection: ServerConnection, request: Request, response: Response
+) -> Response:
+    logger.info(
+        "status=handshake_response path=%s origin=%s http_status=%d",
+        urlsplit(request.path).path,
+        request.headers.get("Origin", "none"),
+        response.status_code,
+    )
+    return response
+
+
+def create_zyrex_agent() -> Agent:
+    """Create the text-only Agno agent for the configured Groq model."""
+    if not GROQ_API_KEY:
+        raise RuntimeError("GROQ_API_KEY is not configured")
+
     agent = Agent(
         model=Groq(id=MODEL_ID, api_key=GROQ_API_KEY),
         description=SYSTEM_INSTRUCTION,
         instructions=[
-            "You are ZYREX AI, a trading-focused assistant.",
-            "Use tools when the user asks for current market data, token prices, or trade analysis.",
-            "For a current price for an asset pair such as BTC/USDT, call get_ticker_price with the base and quote asset IDs. This returns CoinAPI's aggregated rolling 24-hour VWAP, not a price from a specific exchange.",
-            "For exchange-specific candles, use get_klines or get_24hr_ticker with a CoinAPI symbol ID. Do not describe a daily candle as a rolling 24-hour statistic.",
-            "For general trading questions without data requests, answer directly without tools.",
-            "Always explain concepts clearly for beginners and intermediate traders.",
-            "Never fabricate market data, prices, or token information.",
-            "If a tool fails or returns an error, explain the issue honestly to the user.",
-            "Use the risk-checking tools when users ask about trade validation or risk calculations.",
-            "Provide clear, concise answers with appropriate use of Markdown formatting.",
-            "Use emojis to make responses friendly and engaging.",
+            "Answer the user's prompt directly.",
+            "Do not claim to have current market data or use external tools.",
         ],
-        tools=[
-            search_pools,
-            get_pool_data,
-            get_pool_ohlcv,
-            get_trending_pools,
-            get_ticker_price,
-            get_24hr_ticker,
-            get_klines,
-            evaluate_trade_risk,
-            validate_trade_parameters,
-            compare_pools,
-            compare_tokens,
-            check_tool_status,
-        ],
-        tool_choice=tool_choice_mode,  # Dynamic: "auto" for data, "none" for conversation
         markdown=True,
-        temperature=0.7,
+        telemetry=False,
     )
-    # Log only if agent is a real Agent object (not mocked in tests)
-    if hasattr(agent, 'tools'):
-        logger.info("Agent configured with tool_choice=%s and %d tools", tool_choice_mode, len(agent.tools))
+    logger.info("status=agent_initialized model=%s tools=0", MODEL_ID)
     return agent
 
 
-async def handle_websocket(websocket):
-    """Handle incoming WebSocket connections and stream Agno agent responses."""
-    request_id = str(uuid.uuid4())[:8]  # Short correlation ID for logging
-    logger.info("request_id=%s status=websocket_connected origin=%s", request_id, websocket.request_headers.get("Origin", "unknown"))
+def extract_prompt(message: str | bytes) -> str:
+    payload = json.loads(message)
+    if not isinstance(payload, dict):
+        raise ValueError("JSON object required")
+
+    if payload.get("type") == "action" and payload.get("action") == "chat_turn":
+        payload = payload.get("params")
+        if not isinstance(payload, dict):
+            raise ValueError("Legacy chat params must be an object")
+
+    prompt = payload.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise EmptyPromptError("A non-empty prompt is required")
+    return prompt.strip()
+
+
+def _safe_exception_detail(error: Exception) -> str:
+    detail = str(error).replace("\r", " ").replace("\n", " ").strip()
+    if GROQ_API_KEY:
+        detail = detail.replace(GROQ_API_KEY, "[REDACTED]")
+    detail = _BEARER_SECRET.sub(r"\1[REDACTED]", detail)
+    detail = _API_KEY_FIELD.sub(r"\1[REDACTED]", detail)
+    detail = _GROQ_KEY.sub("[REDACTED]", detail)
+    return detail[:1000] or "No provider detail supplied"
+
+
+def _provider_status(error: Exception) -> int | None:
+    status = getattr(error, "status_code", None)
+    if status is None:
+        status = getattr(getattr(error, "response", None), "status_code", None)
+    return status if isinstance(status, int) else None
+
+
+def _log_inference_error(request_id: str, error: Exception) -> None:
+    provider_status = _provider_status(error)
+    detail = _safe_exception_detail(error)
+    lowered_detail = detail.lower()
+    is_model_access_error = provider_status in (400, 403, 404) or any(
+        marker in lowered_detail
+        for marker in ("model decommission", "model not found", "model access")
+    )
+    if provider_status == 401:
+        status = "groq_authentication_error"
+    elif is_model_access_error:
+        status = "groq_model_access_error"
+    else:
+        status = "groq_inference_failed"
+    logger.error(
+        "request_id=%s status=%s model=%s error_type=%s provider_status=%s provider_error=%s",
+        request_id,
+        status,
+        MODEL_ID,
+        type(error).__name__,
+        provider_status if provider_status is not None else "unknown",
+        detail,
+    )
+
+
+async def _send_error(connection: ServerConnection, message: str) -> None:
+    await connection.send(json.dumps({"error": message}))
+    await connection.send("[DONE]")
+
+
+async def handle_websocket(connection: ServerConnection) -> None:
+    request_id = str(uuid.uuid4())[:8]
+    path = urlsplit(connection.request.path).path
+    origin = connection.request.headers.get("Origin", "")
+    if path != "/" or origin != ALLOWED_ORIGIN:
+        logger.warning(
+            "request_id=%s status=websocket_rejected path=%s origin=%s reason=invalid_request",
+            request_id,
+            path,
+            origin or "none",
+        )
+        await connection.close(code=1008, reason="WebSocket request not allowed")
+        return
+
+    logger.info(
+        "request_id=%s status=websocket_accepted path=%s origin=%s http_status=%d",
+        request_id,
+        path,
+        origin,
+        HTTPStatus.SWITCHING_PROTOCOLS,
+    )
+
     try:
-        # Verify origin
-        origin = websocket.request_headers.get("Origin", "")
-        if origin != ALLOWED_ORIGIN:
-            logger.warning("request_id=%s origin_denied=%s", request_id, origin)
-            await websocket.close(code=1008, reason="Origin not allowed")
-            return
+        message = await connection.recv()
+    except ConnectionClosed:
+        logger.info("request_id=%s status=connection_closed_before_message", request_id)
+        return
 
-        if not GROQ_API_KEY:
-            logger.error("request_id=%s status=groq_key_missing", request_id)
-            await websocket.send(json.dumps({"error": "Groq API key is missing"}))
-            await websocket.send("[DONE]")
-            return
+    try:
+        prompt = extract_prompt(message)
+    except json.JSONDecodeError:
+        logger.warning("request_id=%s status=invalid_json", request_id)
+        await _send_error(connection, "Invalid JSON payload.")
+        return
+    except EmptyPromptError:
+        logger.warning("request_id=%s status=empty_prompt", request_id)
+        await _send_error(connection, "A non-empty prompt is required.")
+        return
+    except (TypeError, ValueError, UnicodeDecodeError):
+        logger.warning("request_id=%s status=invalid_request", request_id)
+        await _send_error(connection, "Invalid request payload.")
+        return
 
-        logger.info("request_id=%s status=waiting_for_messages", request_id)
-        async for message in websocket:
-            try:
-                logger.info("request_id=%s status=message_received raw_message_length=%d", request_id, len(message))
-                data = json.loads(message)
-                prompt = data.get("prompt", data.get("message", "")).strip()
-                mode = data.get("mode", "analyst")
-                history = data.get("history", [])
-                logger.info("request_id=%s status=message_parsed prompt_preview=%s mode=%s history_count=%d",
-                            request_id, (prompt[:50] + "...") if len(prompt) > 50 else prompt, mode, len(history))
+    logger.info(
+        "request_id=%s status=request_received prompt_length=%d",
+        request_id,
+        len(prompt),
+    )
+    if not GROQ_API_KEY:
+        logger.error("request_id=%s status=groq_key_missing", request_id)
+        await _send_error(connection, "The assistant is not configured.")
+        return
 
-                if not prompt:
-                    logger.warning("request_id=%s status=empty_prompt", request_id)
-                    await websocket.send(json.dumps({"error": "A message is required"}))
-                    await websocket.send("[DONE]")
-                    continue
+    try:
+        agent = create_zyrex_agent()
+    except Exception as error:
+        logger.error(
+            "request_id=%s status=agent_initialization_failed model=%s error_type=%s error_details=%s",
+            request_id,
+            MODEL_ID,
+            type(error).__name__,
+            _safe_exception_detail(error),
+        )
+        await _send_error(connection, "The assistant is temporarily unavailable.")
+        return
 
-                logger.info("request_id=%s status=request_received mode=%s prompt_length=%d",
-                            request_id, mode, len(prompt))
-
-                # Build conversation context from history
-                conversation_context = []
-                for entry in history[-8:]:
-                    if entry and isinstance(entry.get("text"), str) and entry["text"].strip():
-                        role = entry.get("role", "user")
-                        conversation_context.append(f"{role}: {entry['text'].strip()}")
-
-                # Add mode and current prompt
-                full_prompt = f"Mode: {mode}\n\n"
-                if conversation_context:
-                    full_prompt += "Previous conversation:\n" + "\n".join(conversation_context) + "\n\n"
-                full_prompt += f"Current question: {prompt}"
-
-                # Determine if tools are needed based on the prompt
-                try:
-                    needs_tools = requires_market_data(prompt)
-                    tool_choice_mode = "auto" if needs_tools else "none"
-                    logger.info("request_id=%s status=tool_choice_decision needs_tools=%s tool_choice=%s",
-                                request_id, needs_tools, tool_choice_mode)
-                except Exception as e:
-                    logger.error("request_id=%s status=tool_detection_error error_details=%s",
-                                 request_id, str(e))
-                    # Default to none if detection fails
-                    tool_choice_mode = "none"
-
-                # Create agent with appropriate tool_choice for this request
-                try:
-                    agent = create_zyrex_agent(tool_choice_mode=tool_choice_mode)
-                except Exception as e:
-                    logger.error("request_id=%s status=agent_creation_error error_details=%s",
-                                 request_id, str(e))
-                    await websocket.send(json.dumps({"error": "Failed to initialize agent. Please try again."}))
-                    await websocket.send("[DONE]")
-                    continue
-
-                # Stream response from Agno agent
-                try:
-                    logger.info("request_id=%s status=agent_run_start", request_id)
-                    tool_calls_made = False
-                    async for event in agent.arun(
-                        full_prompt,
-                        stream=True,
-                        stream_events=False  # Only stream content, not internal events
-                    ):
-                        if event.event == RunEvent.run_content and event.content:
-                            await websocket.send(event.content)
-                            # Detect if content looks like a tool result (JSON with source field)
-                            if '"source"' in event.content and ('CoinAPI' in event.content or 'GeckoTerminal' in event.content):
-                                tool_calls_made = True
-                                logger.info("request_id=%s status=tool_result_detected source_detected=true",
-                                            request_id)
-
-                    logger.info("request_id=%s status=agent_run_complete tool_calls_made=%s",
-                                request_id, tool_calls_made)
-                    await websocket.send("[DONE]")
-
-                except Exception as agent_error:
-                    logger.error("request_id=%s status=agent_error error_type=%s error_details=%s",
-                                 request_id, type(agent_error).__name__, str(agent_error))
-                    await websocket.send(json.dumps({"error": "The assistant could not complete this request. Please try again later."}))
-                    await websocket.send("[DONE]")
-
-            except json.JSONDecodeError:
-                logger.warning("request_id=%s status=invalid_json", request_id)
-                await websocket.send(json.dumps({"error": "Invalid JSON payload"}))
-                await websocket.send("[DONE]")
-            except Exception as e:
-                logger.error("request_id=%s status=websocket_message_error error_type=%s error_details=%s",
-                             request_id, type(e).__name__, str(e))
-                await websocket.send(json.dumps({"error": "The request could not be processed."}))
-                await websocket.send("[DONE]")
-
-    except Exception as e:
-        logger.error("request_id=%s status=websocket_connection_error error_type=%s error_details=%s",
-                     request_id, type(e).__name__, str(e))
-    finally:
-        await websocket.close()
+    try:
+        chunks_sent = 0
+        async for event in agent.arun(
+            prompt,
+            stream=True,
+            stream_events=False,
+        ):
+            if event.event == RunEvent.run_content and event.content:
+                await connection.send(event.content)
+                chunks_sent += 1
+        await connection.send("[DONE]")
+        logger.info(
+            "request_id=%s status=response_completed model=%s chunks=%d",
+            request_id,
+            MODEL_ID,
+            chunks_sent,
+        )
+    except Exception as error:
+        _log_inference_error(request_id, error)
+        await _send_error(
+            connection,
+            "The assistant could not complete this request. Please try again later.",
+        )
 
 
-def process_request(path, headers):
-    """Intercept HTTP health pings purely on the /health route, leaving the root path clear for WebSockets."""
-    if path == "/health":
-        import http
-        return http.HTTPStatus.OK, [("Content-Type", "text/plain")], b"ZYREX Engine Online"
-    return None
-
-
-async def main():
-    """Main entry point: start keep-awake task and WebSocket server."""
-    # Start background keep-awake task
-    asyncio.create_task(keep_awake())
-
-    # Start WebSocket server
-    async with serve(handle_websocket, "0.0.0.0", PORT, process_request=process_request):
-        print(f"ZYREX WebSocket server listening on port {PORT}")
-        print(f"Allowed origin: {ALLOWED_ORIGIN}")
-        await asyncio.Future()  # Run forever
+async def main() -> None:
+    async with serve(
+        handle_websocket,
+        "0.0.0.0",
+        PORT,
+        origins=[ALLOWED_ORIGIN],
+        process_request=process_request,
+        process_response=log_handshake_response,
+        logger=logger,
+    ):
+        logger.info(
+            "status=server_started host=0.0.0.0 port=%d allowed_origin=%s model=%s",
+            PORT,
+            ALLOWED_ORIGIN,
+            MODEL_ID,
+        )
+        await asyncio.Future()
 
 
 if __name__ == "__main__":
